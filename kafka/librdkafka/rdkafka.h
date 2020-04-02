@@ -148,7 +148,7 @@ typedef SSIZE_T ssize_t;
  * @remark This value should only be used during compile time,
  *         for runtime checks of version use rd_kafka_version()
  */
-#define RD_KAFKA_VERSION  0x010100c9
+#define RD_KAFKA_VERSION  0x010300ff
 
 /**
  * @brief Returns the librdkafka version as integer.
@@ -193,8 +193,8 @@ typedef enum rd_kafka_type_t {
 } rd_kafka_type_t;
 
 
-/**
- * @enum Timestamp types
+/*!
+ * Timestamp types
  *
  * @sa rd_kafka_message_timestamp()
  */
@@ -223,7 +223,7 @@ const char *rd_kafka_get_debug_contexts(void);
  *             Use rd_kafka_get_debug_contexts() instead.
  */
 #define RD_KAFKA_DEBUG_CONTEXTS \
-        "all,generic,broker,topic,metadata,feature,queue,msg,protocol,cgrp,security,fetch,interceptor,plugin,consumer,admin,eos"
+        "all,generic,broker,topic,metadata,feature,queue,msg,protocol,cgrp,security,fetch,interceptor,plugin,consumer,admin,eos,mock"
 
 
 /* @cond NO_DOC */
@@ -271,7 +271,9 @@ typedef enum {
 	/** Produced message timed out*/
 	RD_KAFKA_RESP_ERR__MSG_TIMED_OUT = -192,
 	/** Reached the end of the topic+partition queue on
-	 * the broker. Not really an error. */
+	 * the broker. Not really an error. 
+	 * This event is disabled by default,
+	 * see the `enable.partition.eof` configuration property. */
 	RD_KAFKA_RESP_ERR__PARTITION_EOF = -191,
 	/** Permanent: Partition does not exist in cluster. */
 	RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION = -190,
@@ -361,6 +363,8 @@ typedef enum {
         RD_KAFKA_RESP_ERR__GAPLESS_GUARANTEE = -148,
         /** Maximum poll interval exceeded */
         RD_KAFKA_RESP_ERR__MAX_POLL_EXCEEDED = -147,
+        /** Unknown broker */
+        RD_KAFKA_RESP_ERR__UNKNOWN_BROKER = -146,
 
 	/** End internal error codes */
 	RD_KAFKA_RESP_ERR__END = -100,
@@ -396,12 +400,21 @@ typedef enum {
 	RD_KAFKA_RESP_ERR_OFFSET_METADATA_TOO_LARGE = 12,
 	/** Broker disconnected before response received */
 	RD_KAFKA_RESP_ERR_NETWORK_EXCEPTION = 13,
-	/** Group coordinator load in progress */
-        RD_KAFKA_RESP_ERR_GROUP_LOAD_IN_PROGRESS = 14,
-	 /** Group coordinator not available */
-        RD_KAFKA_RESP_ERR_GROUP_COORDINATOR_NOT_AVAILABLE = 15,
-	/** Not coordinator for group */
-        RD_KAFKA_RESP_ERR_NOT_COORDINATOR_FOR_GROUP = 16,
+        /** Coordinator load in progress */
+        RD_KAFKA_RESP_ERR_COORDINATOR_LOAD_IN_PROGRESS = 14,
+        /** Group coordinator load in progress */
+#define RD_KAFKA_RESP_ERR_GROUP_LOAD_IN_PROGRESS        \
+        RD_KAFKA_RESP_ERR_COORDINATOR_LOAD_IN_PROGRESS
+        /** Coordinator not available */
+        RD_KAFKA_RESP_ERR_COORDINATOR_NOT_AVAILABLE = 15,
+        /** Group coordinator not available */
+#define RD_KAFKA_RESP_ERR_GROUP_COORDINATOR_NOT_AVAILABLE       \
+        RD_KAFKA_RESP_ERR_COORDINATOR_NOT_AVAILABLE
+        /** Not coordinator */
+        RD_KAFKA_RESP_ERR_NOT_COORDINATOR = 16,
+        /** Not coordinator for group */
+#define RD_KAFKA_RESP_ERR_NOT_COORDINATOR_FOR_GROUP     \
+        RD_KAFKA_RESP_ERR_NOT_COORDINATOR
 	/** Invalid topic */
         RD_KAFKA_RESP_ERR_TOPIC_EXCEPTION = 17,
 	/** Message batch larger than configured server segment size */
@@ -674,9 +687,11 @@ int rd_kafka_errno (void);
  * Idempotent Producer and the in-order or exactly-once producer guarantees
  * can't be satisfied.
  *
+ * @param rk Client instance.
  * @param errstr A human readable error string (nul-terminated) is written to
  *               this location that must be of at least \p errstr_size bytes.
  *               The \p errstr is only written to if there is a fatal error.
+ * @param errstr_size Writable size in \p errstr.
  *
  *
  * @returns RD_KAFKA_RESP_ERR_NO_ERROR if no fatal error has been raised, else
@@ -694,6 +709,7 @@ rd_kafka_resp_err_t rd_kafka_fatal_error (rd_kafka_t *rk,
  * idempotent producer, this method allows an application to trigger
  * fabricated fatal errors in tests to check its error handling code.
  *
+ * @param rk Client instance.
  * @param err The underlying error code.
  * @param reason A human readable error reason.
  *               Will be prefixed with "test_fatal_error: " to differentiate
@@ -729,7 +745,7 @@ typedef struct rd_kafka_topic_partition_s {
 	int64_t      offset;            /**< Offset */
         void        *metadata;          /**< Metadata */
         size_t       metadata_size;     /**< Metadata size */
-        void        *opaque;            /**< Application opaque */
+        void        *opaque;            /**< Opaque value for application use */
         rd_kafka_resp_err_t err;        /**< Error code, depending on use. */
         void       *_private;           /**< INTERNAL USE ONLY,
                                          *   INITIALIZE TO ZERO, DO NOT TOUCH */
@@ -888,12 +904,14 @@ rd_kafka_topic_partition_list_find (rd_kafka_topic_partition_list_t *rktparlist,
  * If \p cmp is NULL the default comparator will be used that
  * sorts by ascending topic name and partition.
  *
+ * \p cmp_opaque is provided as the \p cmp_opaque argument to \p cmp.
+ *
  */
 RD_EXPORT void
 rd_kafka_topic_partition_list_sort (rd_kafka_topic_partition_list_t *rktparlist,
                                     int (*cmp) (const void *a, const void *b,
-                                                void *opaque),
-                                    void *opaque);
+                                                void *cmp_opaque),
+                                    void *cmp_opaque);
 
 
 /**@}*/
@@ -920,7 +938,11 @@ typedef enum rd_kafka_vtype_t {
         RD_KAFKA_VTYPE_PARTITION, /**< (int32_t) Partition */
         RD_KAFKA_VTYPE_VALUE,     /**< (void *, size_t) Message value (payload)*/
         RD_KAFKA_VTYPE_KEY,       /**< (void *, size_t) Message key */
-        RD_KAFKA_VTYPE_OPAQUE,    /**< (void *) Application opaque */
+        RD_KAFKA_VTYPE_OPAQUE,    /**< (void *) Per-message application opaque
+                                   *            value. This is the same as
+                                   *            the _private field in
+                                   *            rd_kafka_message_t, also known
+                                   *            as the msg_opaque. */
         RD_KAFKA_VTYPE_MSGFLAGS,  /**< (int) RD_KAFKA_MSG_F_.. flags */
         RD_KAFKA_VTYPE_TIMESTAMP, /**< (int64_t) Milliseconds since epoch UTC */
         RD_KAFKA_VTYPE_HEADER,    /**< (const char *, const void *, ssize_t)
@@ -971,11 +993,12 @@ typedef enum rd_kafka_vtype_t {
         (void *)KEY, (size_t)LEN
 /*!
  * Message opaque pointer (void *)
- * Same as \c produce(.., msg_opaque), and \c rkmessage->_private .
+ * Same as \c msg_opaque, \c produce(.., msg_opaque),
+ * and \c rkmessage->_private .
  */
-#define RD_KAFKA_V_OPAQUE(opaque)                                 \
-        _LRK_TYPECHECK(RD_KAFKA_VTYPE_OPAQUE, void *, opaque),    \
-        (void *)opaque
+#define RD_KAFKA_V_OPAQUE(msg_opaque)                                   \
+        _LRK_TYPECHECK(RD_KAFKA_VTYPE_OPAQUE, void *, msg_opaque),      \
+        (void *)msg_opaque
 /*!
  * Message flags (int)
  * @sa RD_KAFKA_MSG_F_COPY, et.al.
@@ -1037,6 +1060,7 @@ typedef enum rd_kafka_vtype_t {
  *        Header operations are O(n).
  */
 
+/*! Message Headers list */
 typedef struct rd_kafka_headers_s rd_kafka_headers_t;
 
 /**
@@ -1064,6 +1088,7 @@ rd_kafka_headers_copy (const rd_kafka_headers_t *src);
  * @brief Add header with name \p name and value \p val (copied) of size
  *        \p size (not including null-terminator).
  *
+ * @param hdrs       Headers list.
  * @param name       Header name.
  * @param name_size  Header name size (not including the null-terminator).
  *                   If -1 the \p name length is automatically acquired using
@@ -1095,6 +1120,7 @@ rd_kafka_header_remove (rd_kafka_headers_t *hdrs, const char *name);
 /**
  * @brief Find last header in list \p hdrs matching \p name.
  *
+ * @param hdrs   Headers list.
  * @param name   Header to find (last match).
  * @param valuep (out) Set to a (null-terminated) const pointer to the value
  *               (may be NULL).
@@ -1195,10 +1221,12 @@ typedef struct rd_kafka_message_s {
                                     *   May be RD_KAFKA_OFFSET_INVALID
                                     *   for retried messages when
                                     *   idempotence is enabled. */
-	void  *_private;           /**< Consume:
-				    *  - rdkafka private pointer: DO NOT MODIFY
-				    *  - dr_msg_cb:
-                                    *    msg_opaque from produce() call */
+        void  *_private;           /**< Consumer:
+                                    *  - rdkafka private pointer: DO NOT MODIFY
+                                    *  Producer:
+                                    *  - dr_msg_cb:
+                                    *    msg_opaque from produce() call or
+                                    *    RD_KAFKA_V_OPAQUE from producev(). */
 } rd_kafka_message_t;
 
 
@@ -1297,6 +1325,7 @@ rd_kafka_message_detach_headers (rd_kafka_message_t *rkmessage,
 /**
  * @brief Replace the message's current headers with a new list.
  *
+ * @param rkmessage The message to set headers.
  * @param hdrs New header list. The message object assumes ownership of
  *             the list, the list will be destroyed automatically with
  *             the message object.
@@ -1396,9 +1425,12 @@ typedef enum {
  * The properties are identical to the Apache Kafka configuration properties
  * whenever possible.
  *
+ * @remark A successful call to rd_kafka_new() will assume ownership of
+ * the conf object and rd_kafka_conf_destroy() must not be called.
+ *
  * @returns A new rd_kafka_conf_t object with defaults set.
  *
- * @sa rd_kafka_conf_set(), rd_kafka_conf_destroy()
+ * @sa rd_kafka_new(), rd_kafka_conf_set(), rd_kafka_conf_destroy()
  */
 RD_EXPORT
 rd_kafka_conf_t *rd_kafka_conf_new(void);
@@ -1547,6 +1579,11 @@ void rd_kafka_conf_set_dr_cb(rd_kafka_conf_t *conf,
  * The broker-assigned offset can be retrieved with \c rkmessage->offset
  * and the timestamp can be retrieved using rd_kafka_message_timestamp().
  *
+ * The \p dr_msg_cb \c opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
+ * The per-message msg_opaque value is available in
+ * \c rd_kafka_message_t._private.
+ *
  * @remark The Idempotent Producer may return invalid timestamp
  *         (RD_KAFKA_TIMESTAMP_NOT_AVAILABLE), and
  *         and offset (RD_KAFKA_OFFSET_INVALID) for retried messages
@@ -1562,8 +1599,11 @@ void rd_kafka_conf_set_dr_msg_cb(rd_kafka_conf_t *conf,
 
 
 /**
- * @brief \b Consumer: Set consume callback for use with rd_kafka_consumer_poll()
+ * @brief \b Consumer: Set consume callback for use with
+ *        rd_kafka_consumer_poll()
  *
+ * The \p consume_cb \p opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
  */
 RD_EXPORT
 void rd_kafka_conf_set_consume_cb (rd_kafka_conf_t *conf,
@@ -1595,6 +1635,9 @@ void rd_kafka_conf_set_consume_cb (rd_kafka_conf_t *conf,
  * in performing other operations along with the assigning/revocation,
  * such as fetching offsets from an alternate location (on assign)
  * or manually committing offsets (on revoke).
+ *
+ * The callback's \p opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
  *
  * @remark The \p partitions list is destroyed by librdkafka on return
  *         return from the rebalance_cb and must not be freed or
@@ -1665,6 +1708,9 @@ void rd_kafka_conf_set_rebalance_cb (
  * The \p offsets list contains per-partition information:
  *   - \c offset: committed offset (attempted)
  *   - \c err:    commit error
+ *
+ * The callback's \p opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
  */
 RD_EXPORT
 void rd_kafka_conf_set_offset_commit_cb (
@@ -1693,6 +1739,9 @@ void rd_kafka_conf_set_offset_commit_cb (
  *
  * If no \p error_cb is registered, or RD_KAFKA_EVENT_ERROR has not been set
  * with rd_kafka_conf_set_events, then the errors will be logged instead.
+ *
+ * The callback's \p opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
  */
 RD_EXPORT
 void rd_kafka_conf_set_error_cb(rd_kafka_conf_t *conf,
@@ -1711,6 +1760,9 @@ void rd_kafka_conf_set_error_cb(rd_kafka_conf_t *conf,
  *
  * An application must call rd_kafka_poll() or rd_kafka_consumer_poll() at
  * regular intervals to serve queued callbacks.
+ *
+ * The callback's \p opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
  *
  * @remark Requires broker version 0.9.0 or later.
  */
@@ -1755,7 +1807,8 @@ void rd_kafka_conf_set_log_cb(rd_kafka_conf_t *conf,
  *   - \p rk - Kafka handle
  *   - \p json - String containing the statistics data in JSON format
  *   - \p json_len - Length of \p json string.
- *   - \p opaque - Application-provided opaque.
+ *   - \p opaque - Application-provided opaque as set by
+ *                 rd_kafka_conf_set_opaque().
  *
  * For more information on the format of \p json, see
  * https://github.com/edenhill/librdkafka/wiki/Statistics
@@ -1784,7 +1837,7 @@ void rd_kafka_conf_set_stats_cb(rd_kafka_conf_t *conf,
  *   \p oauthbearer_config - Value of configuration property
  *                           sasl.oauthbearer.config.
  *   \p opaque - Application-provided opaque set via
- *   rd_kafka_conf_set_opaque()
+ *               rd_kafka_conf_set_opaque()
  * 
  * The SASL/OAUTHBEARER token refresh callback is triggered via rd_kafka_poll()
  * whenever OAUTHBEARER is the SASL mechanism and a token needs to be retrieved,
@@ -1824,6 +1877,9 @@ void rd_kafka_conf_set_oauthbearer_token_refresh_cb (
  * The socket shall be created with \c CLOEXEC set in a racefree fashion, if
  * possible.
  *
+ * The callback's \p opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
+ *
  * Default:
  *  - on linux: racefree CLOEXEC
  *  - others  : non-racefree CLOEXEC
@@ -1848,6 +1904,9 @@ void rd_kafka_conf_set_socket_cb(rd_kafka_conf_t *conf,
  * \p connect_cb shall return 0 on success (socket connected) or an error
  * number (errno) on error.
  *
+ * The callback's \p opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
+ *
  * @remark The callback will be called from an internal librdkafka thread.
  */
 RD_EXPORT void
@@ -1862,6 +1921,9 @@ rd_kafka_conf_set_connect_cb (rd_kafka_conf_t *conf,
  * @brief Set close socket callback.
  *
  * Close a socket (optionally opened with socket_cb()).
+ *
+ * The callback's \p opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
  *
  * @remark The callback will be called from an internal librdkafka thread.
  */
@@ -1884,6 +1946,9 @@ rd_kafka_conf_set_closesocket_cb (rd_kafka_conf_t *conf,
  * Default:
  *  - on linux: racefree CLOEXEC
  *  - others  : non-racefree CLOEXEC
+ *
+ * The callback's \p opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
  *
  * @remark The callback will be called from an internal librdkafka thread.
  */
@@ -1909,11 +1974,11 @@ void rd_kafka_conf_set_open_cb (rd_kafka_conf_t *conf,
  * the certificate succeed (0) or failed (an OpenSSL error code).
  * The application may set the SSL context error code by returning 0
  * from the verify callback and providing a non-zero SSL context error code
- * in \p x509_error.
- * If the verify callback sets \x509_error to 0, returns 1, and the
- * original \p x509_error was non-zero, the error on the SSL context will
+ * in \c x509_error.
+ * If the verify callback sets \c x509_error to 0, returns 1, and the
+ * original \c x509_error was non-zero, the error on the SSL context will
  * be cleared.
- * \p x509_error is always a valid pointer to an int.
+ * \c x509_error is always a valid pointer to an int.
  *
  * \c depth is the depth of the current certificate in the chain, starting
  * at the root certificate.
@@ -1924,6 +1989,9 @@ void rd_kafka_conf_set_open_cb (rd_kafka_conf_t *conf,
  * The callback must return 1 if verification succeeds, or
  * 0 if verification fails and then write a human-readable error message
  * to \c errstr (limited to \c errstr_size bytes, including nul-term).
+ *
+ * The callback's \p opaque argument is the opaque set with
+ * rd_kafka_conf_set_opaque().
  *
  * @returns RD_KAFKA_CONF_OK if SSL is supported in this build, else
  *          RD_KAFKA_CONF_INVALID.
@@ -2016,12 +2084,15 @@ rd_kafka_conf_set_ssl_cert (rd_kafka_conf_t *conf,
 
 /**
  * @brief Sets the application's opaque pointer that will be passed to callbacks
+ *
+ * @sa rd_kafka_opaque()
  */
 RD_EXPORT
 void rd_kafka_conf_set_opaque(rd_kafka_conf_t *conf, void *opaque);
 
 /**
- * @brief Retrieves the opaque pointer previously set with rd_kafka_conf_set_opaque()
+ * @brief Retrieves the opaque pointer previously set
+ *        with rd_kafka_conf_set_opaque()
  */
 RD_EXPORT
 void *rd_kafka_opaque(const rd_kafka_t *rk);
@@ -2181,9 +2252,12 @@ rd_kafka_conf_res_t rd_kafka_topic_conf_set(rd_kafka_topic_conf_t *conf,
 /**
  * @brief Sets the application's opaque pointer that will be passed to all topic
  * callbacks as the \c rkt_opaque argument.
+ *
+ * @sa rd_kafka_topic_opaque()
  */
 RD_EXPORT
-void rd_kafka_topic_conf_set_opaque(rd_kafka_topic_conf_t *conf, void *opaque);
+void rd_kafka_topic_conf_set_opaque(rd_kafka_topic_conf_t *conf,
+                                    void *rkt_opaque);
 
 
 /**
@@ -2191,6 +2265,11 @@ void rd_kafka_topic_conf_set_opaque(rd_kafka_topic_conf_t *conf, void *opaque);
  *
  * The partitioner may be called in any thread at any time,
  * it may be called multiple times for the same message/key.
+ *
+ * The callback's \p rkt_opaque argument is the opaque set by
+ * rd_kafka_topic_conf_set_opaque().
+ * The callback's \p msg_opaque argument is the per-message opaque
+ * passed to produce().
  *
  * Partitioner function constraints:
  *   - MUST NOT call any rd_kafka_*() functions except:
@@ -2267,6 +2346,11 @@ int rd_kafka_topic_partition_available(const rd_kafka_topic_t *rkt,
  *
  * Will try not to return unavailable partitions.
  *
+ * The \p rkt_opaque argument is the opaque set by
+ * rd_kafka_topic_conf_set_opaque().
+ * The \p msg_opaque argument is the per-message opaque
+ * passed to produce().
+ *
  * @returns a random partition between 0 and \p partition_cnt - 1.
  *
  */
@@ -2274,12 +2358,17 @@ RD_EXPORT
 int32_t rd_kafka_msg_partitioner_random(const rd_kafka_topic_t *rkt,
 					 const void *key, size_t keylen,
 					 int32_t partition_cnt,
-					 void *opaque, void *msg_opaque);
+					 void *rkt_opaque, void *msg_opaque);
 
 /**
  * @brief Consistent partitioner.
  *
  * Uses consistent hashing to map identical keys onto identical partitions.
+ *
+ * The \p rkt_opaque argument is the opaque set by
+ * rd_kafka_topic_conf_set_opaque().
+ * The \p msg_opaque argument is the per-message opaque
+ * passed to produce().
  *
  * @returns a \"random\" partition between 0 and \p partition_cnt - 1 based on
  *          the CRC value of the key
@@ -2288,7 +2377,7 @@ RD_EXPORT
 int32_t rd_kafka_msg_partitioner_consistent (const rd_kafka_topic_t *rkt,
 					 const void *key, size_t keylen,
 					 int32_t partition_cnt,
-					 void *opaque, void *msg_opaque);
+					 void *rkt_opaque, void *msg_opaque);
 
 /**
  * @brief Consistent-Random partitioner.
@@ -2297,6 +2386,11 @@ int32_t rd_kafka_msg_partitioner_consistent (const rd_kafka_topic_t *rkt,
  * Uses consistent hashing to map identical keys onto identical partitions, and
  * messages without keys will be assigned via the random partitioner.
  *
+ * The \p rkt_opaque argument is the opaque set by
+ * rd_kafka_topic_conf_set_opaque().
+ * The \p msg_opaque argument is the per-message opaque
+ * passed to produce().
+ *
  * @returns a \"random\" partition between 0 and \p partition_cnt - 1 based on
  *          the CRC value of the key (if provided)
  */
@@ -2304,7 +2398,7 @@ RD_EXPORT
 int32_t rd_kafka_msg_partitioner_consistent_random (const rd_kafka_topic_t *rkt,
            const void *key, size_t keylen,
            int32_t partition_cnt,
-           void *opaque, void *msg_opaque);
+           void *rkt_opaque, void *msg_opaque);
 
 
 /**
@@ -2312,6 +2406,11 @@ int32_t rd_kafka_msg_partitioner_consistent_random (const rd_kafka_topic_t *rkt,
  *
  * Uses consistent hashing to map identical keys onto identical partitions
  * using Java-compatible Murmur2 hashing.
+ *
+ * The \p rkt_opaque argument is the opaque set by
+ * rd_kafka_topic_conf_set_opaque().
+ * The \p msg_opaque argument is the per-message opaque
+ * passed to produce().
  *
  * @returns a partition between 0 and \p partition_cnt - 1.
  */
@@ -2328,6 +2427,11 @@ int32_t rd_kafka_msg_partitioner_murmur2 (const rd_kafka_topic_t *rkt,
  * Uses consistent hashing to map identical keys onto identical partitions
  * using Java-compatible Murmur2 hashing.
  * Messages without keys will be assigned via the random partitioner.
+ *
+ * The \p rkt_opaque argument is the opaque set by
+ * rd_kafka_topic_conf_set_opaque().
+ * The \p msg_opaque argument is the per-message opaque
+ * passed to produce().
  *
  * @returns a partition between 0 and \p partition_cnt - 1.
  */
@@ -2459,6 +2563,7 @@ char *rd_kafka_memberid (const rd_kafka_t *rk);
 /**
  * @brief Returns the ClusterId as reported in broker metadata.
  *
+ * @param rk         Client instance.
  * @param timeout_ms If there is no cached value from metadata retrieval
  *                   then this specifies the maximum amount of time
  *                   (in milliseconds) the call will block waiting
@@ -2480,6 +2585,7 @@ char *rd_kafka_clusterid (rd_kafka_t *rk, int timeout_ms);
 /**
  * @brief Returns the current ControllerId as reported in broker metadata.
  *
+ * @param rk         Client instance.
  * @param timeout_ms If there is no cached value from metadata retrieval
  *                   then this specifies the maximum amount of time
  *                   (in milliseconds) the call will block waiting
@@ -2542,7 +2648,8 @@ const char *rd_kafka_topic_name(const rd_kafka_topic_t *rkt);
 
 
 /**
- * @brief Get the \p rkt_opaque pointer that was set in the topic configuration.
+ * @brief Get the \p rkt_opaque pointer that was set in the topic configuration
+ *        with rd_kafka_topic_conf_set_opaque().
  */
 RD_EXPORT
 void *rd_kafka_topic_opaque (const rd_kafka_topic_t *rkt);
@@ -2833,6 +2940,7 @@ void rd_kafka_queue_forward (rd_kafka_queue_t *src, rd_kafka_queue_t *dst);
  *        This allows an application to serve log callbacks (\c log_cb)
  *        in its thread of choice.
  *
+ * @param rk   Client instance.
  * @param rkqu Queue to forward logs to. If the value is NULL the logs
  *        are forwarded to the main queue.
  *
@@ -2882,6 +2990,8 @@ void rd_kafka_queue_io_event_enable (rd_kafka_queue_t *rkqu, int fd,
  *
  * To remove event triggering call with \p event_cb = NULL.
  *
+ * The \p qev_opaque is passed to the callback's \p qev_opaque argument.
+ *
  * @remark IO and callback event triggering are mutually exclusive.
  * @remark Since the callback may be triggered from internal librdkafka
  *         threads, the application must not perform any pro-longed work in
@@ -2891,8 +3001,8 @@ void rd_kafka_queue_io_event_enable (rd_kafka_queue_t *rkqu, int fd,
 RD_EXPORT
 void rd_kafka_queue_cb_event_enable (rd_kafka_queue_t *rkqu,
                                      void (*event_cb) (rd_kafka_t *rk,
-                                                       void *opaque),
-                                     void *opaque);
+                                                       void *qev_opaque),
+                                     void *qev_opaque);
 
 /**@}*/
 
@@ -3095,7 +3205,8 @@ ssize_t rd_kafka_consume_batch(rd_kafka_topic_t *rkt, int32_t partition,
  * the application \b MUST \b NOT call `rd_kafka_message_destroy()` on the
  * provided \p rkmessage.
  *
- * The \p opaque argument is passed to the 'consume_cb' as \p opaque.
+ * The \p commit_opaque argument is passed to the \p consume_cb
+ * as \p commit_opaque.
  *
  * @returns the number of messages processed or -1 on error.
  *
@@ -3106,11 +3217,11 @@ ssize_t rd_kafka_consume_batch(rd_kafka_topic_t *rkt, int32_t partition,
  */
 RD_EXPORT
 int rd_kafka_consume_callback(rd_kafka_topic_t *rkt, int32_t partition,
-			       int timeout_ms,
-			       void (*consume_cb) (rd_kafka_message_t
-						   *rkmessage,
-						   void *opaque),
-			       void *opaque);
+                              int timeout_ms,
+                              void (*consume_cb) (rd_kafka_message_t
+                                                  *rkmessage,
+                                                  void *commit_opaque),
+                              void *commit_opaque);
 
 
 /**
@@ -3131,7 +3242,7 @@ int rd_kafka_consume_callback(rd_kafka_topic_t *rkt, int32_t partition,
  */
 RD_EXPORT
 rd_kafka_message_t *rd_kafka_consume_queue(rd_kafka_queue_t *rkqu,
-					    int timeout_ms);
+                                           int timeout_ms);
 
 /**
  * @brief Consume batch of messages from queue
@@ -3150,12 +3261,12 @@ ssize_t rd_kafka_consume_batch_queue(rd_kafka_queue_t *rkqu,
  * @sa rd_kafka_consume_callback()
  */
 RD_EXPORT
-int rd_kafka_consume_callback_queue(rd_kafka_queue_t *rkqu,
-				     int timeout_ms,
-				     void (*consume_cb) (rd_kafka_message_t
-							 *rkmessage,
-							 void *opaque),
-				     void *opaque);
+int rd_kafka_consume_callback_queue (rd_kafka_queue_t *rkqu,
+                                     int timeout_ms,
+                                     void (*consume_cb) (rd_kafka_message_t
+                                                         *rkmessage,
+                                                         void *commit_opaque),
+                                     void *commit_opaque);
 
 
 /**@}*/
@@ -3399,11 +3510,12 @@ rd_kafka_commit_message (rd_kafka_t *rk, const rd_kafka_message_t *rkmessage,
  *
  * If the application uses one of the poll APIs (rd_kafka_poll(),
  * rd_kafka_consumer_poll(), rd_kafka_queue_poll(), ..) to serve the queue
- * the \p cb callback is required. \p opaque is passed to the callback.
+ * the \p cb callback is required.
  *
- * If using the event API the callback is ignored and the offset commit result
- * will be returned as an RD_KAFKA_EVENT_COMMIT event. The \p opaque
- * value will be available with rd_kafka_event_opaque()
+ * The \p commit_opaque argument is passed to the callback as \p commit_opaque,
+ * or if using the event API the callback is ignored and the offset commit
+ * result will be returned as an RD_KAFKA_EVENT_COMMIT event and the
+ * \p commit_opaque value will be available with rd_kafka_event_opaque().
  *
  * If \p rkqu is NULL a temporary queue will be created and the callback will
  * be served by this call.
@@ -3418,8 +3530,8 @@ rd_kafka_commit_queue (rd_kafka_t *rk,
 		       void (*cb) (rd_kafka_t *rk,
 				   rd_kafka_resp_err_t err,
 				   rd_kafka_topic_partition_list_t *offsets,
-				   void *opaque),
-		       void *opaque);
+                                   void *commit_opaque),
+		       void *commit_opaque);
 
 
 /**
@@ -3562,8 +3674,8 @@ rd_kafka_position (rd_kafka_t *rk,
  * message to the broker and passed on to the consumer.
  *
  * \p msg_opaque is an optional application-provided per-message opaque
- * pointer that will provided in the delivery report callback (`dr_cb`) for
- * referencing this message.
+ * pointer that will provided in the message's delivery report callback
+ * (\c dr_msg_cb or \c dr_cb) and the \c rd_kafka_message_t \c _private field.
  *
  * @remark on_send() and on_acknowledgement() interceptors may be called
  *         from this function. on_acknowledgement() will only be called if the
@@ -3666,7 +3778,8 @@ rd_kafka_resp_err_t rd_kafka_flush (rd_kafka_t *rk, int timeout_ms);
 /**
  * @brief Purge messages currently handled by the producer instance.
  *
- * @param purge_flags tells which messages should be purged and how.
+ * @param rk          Client instance.
+ * @param purge_flags Tells which messages to purge and how.
  *
  * The application will need to call rd_kafka_poll() or rd_kafka_flush()
  * afterwards to serve the delivery report callbacks of the purged messages.
@@ -3993,8 +4106,6 @@ void rd_kafka_log_print(const rd_kafka_t *rk, int level,
 
 /**
  * @brief Builtin log sink: print to syslog.
- * @remark This logger is only available if librdkafka was built
- *         with syslog support.
  */
 RD_EXPORT
 void rd_kafka_log_syslog(const rd_kafka_t *rk, int level,
@@ -4046,6 +4157,20 @@ void rd_kafka_dump(FILE *fp, rd_kafka_t *rk);
  */
 RD_EXPORT
 int rd_kafka_thread_cnt(void);
+
+
+/**
+ * @enum rd_kafka_thread_type_t
+ *
+ * @brief librdkafka internal thread type.
+ *
+ * @sa rd_kafka_interceptor_add_on_thread_start()
+ */
+typedef enum rd_kafka_thread_type_t {
+        RD_KAFKA_THREAD_MAIN,       /**< librdkafka's internal main thread */
+        RD_KAFKA_THREAD_BACKGROUND, /**< Background thread (if enabled) */
+        RD_KAFKA_THREAD_BROKER      /**< Per-broker thread */
+} rd_kafka_thread_type_t;
 
 
 /**
@@ -4106,7 +4231,7 @@ rd_kafka_resp_err_t rd_kafka_poll_set_consumer (rd_kafka_t *rk);
  * @brief Event types
  */
 typedef int rd_kafka_event_type_t;
-#define RD_KAFKA_EVENT_NONE          0x0
+#define RD_KAFKA_EVENT_NONE          0x0  /**< Unset value */
 #define RD_KAFKA_EVENT_DR            0x1  /**< Producer Delivery report batch */
 #define RD_KAFKA_EVENT_FETCH         0x2  /**< Fetched message (consumer) */
 #define RD_KAFKA_EVENT_LOG           0x4  /**< Log message */
@@ -4257,7 +4382,8 @@ int rd_kafka_event_error_is_fatal (rd_kafka_event_t *rkev);
 
 
 /**
- * @returns the user opaque (if any)
+ * @returns the event opaque (if any) as passed to rd_kafka_commit() (et.al) or
+ *          rd_kafka_AdminOptions_set_opaque(), depending on event type.
  *
  * Event types:
  *  - RD_KAFKA_EVENT_OFFSET_COMMIT
@@ -4325,14 +4451,20 @@ RD_EXPORT rd_kafka_topic_partition_t *
 rd_kafka_event_topic_partition (rd_kafka_event_t *rkev);
 
 
-
+/*! CreateTopics result type */
 typedef rd_kafka_event_t rd_kafka_CreateTopics_result_t;
+/*! DeleteTopics result type */
 typedef rd_kafka_event_t rd_kafka_DeleteTopics_result_t;
+/*! CreatePartitions result type */
 typedef rd_kafka_event_t rd_kafka_CreatePartitions_result_t;
+/*! AlterConfigs result type */
 typedef rd_kafka_event_t rd_kafka_AlterConfigs_result_t;
+/*! CreateTopics result type */
 typedef rd_kafka_event_t rd_kafka_DescribeConfigs_result_t;
 
 /**
+ * @brief Get CreateTopics result.
+ *
  * @returns the result of a CreateTopics request, or NULL if event is of
  *          different type.
  *
@@ -4343,6 +4475,8 @@ RD_EXPORT const rd_kafka_CreateTopics_result_t *
 rd_kafka_event_CreateTopics_result (rd_kafka_event_t *rkev);
 
 /**
+ * @brief Get DeleteTopics result.
+ *
  * @returns the result of a DeleteTopics request, or NULL if event is of
  *          different type.
  *
@@ -4353,6 +4487,8 @@ RD_EXPORT const rd_kafka_DeleteTopics_result_t *
 rd_kafka_event_DeleteTopics_result (rd_kafka_event_t *rkev);
 
 /**
+ * @brief Get CreatePartitions result.
+ *
  * @returns the result of a CreatePartitions request, or NULL if event is of
  *          different type.
  *
@@ -4363,6 +4499,8 @@ RD_EXPORT const rd_kafka_CreatePartitions_result_t *
 rd_kafka_event_CreatePartitions_result (rd_kafka_event_t *rkev);
 
 /**
+ * @brief Get AlterConfigs result.
+ *
  * @returns the result of a AlterConfigs request, or NULL if event is of
  *          different type.
  *
@@ -4373,6 +4511,8 @@ RD_EXPORT const rd_kafka_AlterConfigs_result_t *
 rd_kafka_event_AlterConfigs_result (rd_kafka_event_t *rkev);
 
 /**
+ * @brief Get DescribeConfigs result.
+ *
  * @returns the result of a DescribeConfigs request, or NULL if event is of
  *          different type.
  *
@@ -4751,6 +4891,57 @@ typedef rd_kafka_resp_err_t
         void *ic_opaque);
 
 
+/**
+ * @brief on_thread_start() is called from a newly created librdkafka-managed
+ *        thread.
+
+ * @param rk The client instance.
+ * @param thread_type Thread type.
+ * @param thread_name Human-readable thread name, may not be unique.
+ * @param ic_opaque The interceptor's opaque pointer specified in ..add..().
+ *
+ * @warning The on_thread_start() interceptor is called from internal
+ *          librdkafka threads. An on_thread_start() interceptor MUST NOT
+ *          call any librdkafka API's associated with the \p rk, or perform
+ *          any blocking or prolonged work.
+ *
+ * @returns an error code on failure, the error is logged but otherwise ignored.
+ */
+typedef rd_kafka_resp_err_t
+(rd_kafka_interceptor_f_on_thread_start_t) (
+        rd_kafka_t *rk,
+        rd_kafka_thread_type_t thread_type,
+        const char *thread_name,
+        void *ic_opaque);
+
+
+/**
+ * @brief on_thread_exit() is called just prior to a librdkafka-managed
+ *        thread exiting from the exiting thread itself.
+ *
+ * @param rk The client instance.
+ * @param thread_type Thread type.n
+ * @param thread_name Human-readable thread name, may not be unique.
+ * @param ic_opaque The interceptor's opaque pointer specified in ..add..().
+ *
+ * @remark Depending on the thread type, librdkafka may execute additional
+ *         code on the thread after on_thread_exit() returns.
+ *
+ * @warning The on_thread_exit() interceptor is called from internal
+ *          librdkafka threads. An on_thread_exit() interceptor MUST NOT
+ *          call any librdkafka API's associated with the \p rk, or perform
+ *          any blocking or prolonged work.
+ *
+ * @returns an error code on failure, the error is logged but otherwise ignored.
+ */
+typedef rd_kafka_resp_err_t
+(rd_kafka_interceptor_f_on_thread_exit_t) (
+        rd_kafka_t *rk,
+        rd_kafka_thread_type_t thread_type,
+        const char *thread_name,
+        void *ic_opaque);
+
+
 
 /**
  * @brief Append an on_conf_set() interceptor.
@@ -4814,7 +5005,7 @@ rd_kafka_conf_interceptor_add_on_conf_destroy (
  *
  * @param conf Configuration object.
  * @param ic_name Interceptor name, used in logging.
- * @param on_send Function pointer.
+ * @param on_new Function pointer.
  * @param ic_opaque Opaque value that will be passed to the function.
   *
  * @remark Since the on_new() interceptor is added to the configuration object
@@ -4950,6 +5141,43 @@ rd_kafka_interceptor_add_on_request_sent (
         rd_kafka_interceptor_f_on_request_sent_t *on_request_sent,
         void *ic_opaque);
 
+
+/**
+ * @brief Append an on_thread_start() interceptor.
+ *
+ * @param rk Client instance.
+ * @param ic_name Interceptor name, used in logging.
+ * @param on_thread_start() Function pointer.
+ * @param ic_opaque Opaque value that will be passed to the function.
+ *
+ * @returns RD_KAFKA_RESP_ERR_NO_ERROR on success or RD_KAFKA_RESP_ERR__CONFLICT
+ *          if an existing intercepted with the same \p ic_name and function
+ *          has already been added to \p conf.
+ */
+RD_EXPORT rd_kafka_resp_err_t
+rd_kafka_interceptor_add_on_thread_start (
+        rd_kafka_t *rk, const char *ic_name,
+        rd_kafka_interceptor_f_on_thread_start_t *on_thread_start,
+        void *ic_opaque);
+
+
+/**
+ * @brief Append an on_thread_exit() interceptor.
+ *
+ * @param rk Client instance.
+ * @param ic_name Interceptor name, used in logging.
+ * @param on_thread_exit() Function pointer.
+ * @param ic_opaque Opaque value that will be passed to the function.
+ *
+ * @returns RD_KAFKA_RESP_ERR_NO_ERROR on success or RD_KAFKA_RESP_ERR__CONFLICT
+ *          if an existing intercepted with the same \p ic_name and function
+ *          has already been added to \p conf.
+ */
+RD_EXPORT rd_kafka_resp_err_t
+rd_kafka_interceptor_add_on_thread_exit (
+        rd_kafka_t *rk, const char *ic_name,
+        rd_kafka_interceptor_f_on_thread_exit_t *on_thread_exit,
+        void *ic_opaque);
 
 
 
@@ -5098,8 +5326,13 @@ RD_EXPORT void rd_kafka_AdminOptions_destroy (rd_kafka_AdminOptions_t *options);
  * @brief Sets the overall request timeout, including broker lookup,
  *        request transmission, operation time on broker, and response.
  *
+ * @param options Admin options.
  * @param timeout_ms Timeout in milliseconds, use -1 for indefinite timeout.
  *                   Defaults to `socket.timeout.ms`.
+ * @param errstr A human readable error string (nul-terminated) is written to
+ *               this location that must be of at least \p errstr_size bytes.
+ *               The \p errstr is only written in case of error.
+ * @param errstr_size Writable size in \p errstr.
  *
  * @returns RD_KAFKA_RESP_ERR_NO_ERROR on success, or
  *          RD_KAFKA_RESP_ERR__INVALID_ARG if timeout was out of range in which
@@ -5125,8 +5358,12 @@ rd_kafka_AdminOptions_set_request_timeout (rd_kafka_AdminOptions_t *options,
  * DeleteTopics: same semantics as CreateTopics.
  * CreatePartitions: same semantics as CreateTopics.
  *
- *
+ * @param options Admin options.
  * @param timeout_ms Timeout in milliseconds.
+ * @param errstr A human readable error string (nul-terminated) is written to
+ *               this location that must be of at least \p errstr_size bytes.
+ *               The \p errstr is only written in case of error.
+ * @param errstr_size Writable size in \p errstr.
  *
  * @returns RD_KAFKA_RESP_ERR_NO_ERROR on success, or
  *          RD_KAFKA_RESP_ERR__INVALID_ARG if timeout was out of range in which
@@ -5145,7 +5382,12 @@ rd_kafka_AdminOptions_set_operation_timeout (rd_kafka_AdminOptions_t *options,
  * @brief Tell broker to only validate the request, without performing
  *        the requested operation (create topics, etc).
  *
+ * @param options Admin options.
  * @param true_or_false Defaults to false.
+ * @param errstr A human readable error string (nul-terminated) is written to
+ *               this location that must be of at least \p errstr_size bytes.
+ *               The \p errstr is only written in case of error.
+ * @param errstr_size Writable size in \p errstr.
  *
  * @returns RD_KAFKA_RESP_ERR_NO_ERROR on success or an
  *          error code on failure in which case an error string will
@@ -5170,7 +5412,12 @@ rd_kafka_AdminOptions_set_validate_only (rd_kafka_AdminOptions_t *options,
  *   - DescribeConfigs with a BROKER resource are sent to the broker id set
  *     as the resource name.
  *
+ * @param options Admin Options.
  * @param broker_id The broker to send the request to.
+ * @param errstr A human readable error string (nul-terminated) is written to
+ *               this location that must be of at least \p errstr_size bytes.
+ *               The \p errstr is only written in case of error.
+ * @param errstr_size Writable size in \p errstr.
  *
  * @returns RD_KAFKA_RESP_ERR_NO_ERROR on success or an
  *          error code on failure in which case an error string will
@@ -5193,7 +5440,7 @@ rd_kafka_AdminOptions_set_broker (rd_kafka_AdminOptions_t *options,
  */
 RD_EXPORT void
 rd_kafka_AdminOptions_set_opaque (rd_kafka_AdminOptions_t *options,
-                                  void *opaque);
+                                  void *ev_opaque);
 
 
 
@@ -5218,6 +5465,11 @@ typedef struct rd_kafka_NewTopic_s rd_kafka_NewTopic_t;
  * @param replication_factor Default replication factor for the topic's
  *                           partitions, or -1 if set_replica_assignment()
  *                           will be used.
+ * @param errstr A human readable error string (nul-terminated) is written to
+ *               this location that must be of at least \p errstr_size bytes.
+ *               The \p errstr is only written in case of error.
+ * @param errstr_size Writable size in \p errstr.
+ *
  *
  * @returns a new allocated NewTopic object, or NULL if the input parameters
  *          are invalid.
@@ -5295,6 +5547,7 @@ rd_kafka_NewTopic_set_config (rd_kafka_NewTopic_t *new_topic,
  * @brief Create topics in cluster as specified by the \p new_topics
  *        array of size \p new_topic_cnt elements.
  *
+ * @param rk Client instance.
  * @param new_topics Array of new topics to create.
  * @param new_topic_cnt Number of elements in \p new_topics array.
  * @param options Optional admin options, or NULL for defaults.
@@ -5324,7 +5577,9 @@ rd_kafka_CreateTopics (rd_kafka_t *rk,
  * @brief Get an array of topic results from a CreateTopics result.
  *
  * The returned \p topics life-time is the same as the \p result object.
- * @param cntp is updated to the number of elements in the array.
+ *
+ * @param result Result to get topics from. 
+ * @param cntp Updated to the number of elements in the array.
  */
 RD_EXPORT const rd_kafka_topic_result_t **
 rd_kafka_CreateTopics_result_topics (
@@ -5375,8 +5630,9 @@ rd_kafka_DeleteTopic_destroy_array (rd_kafka_DeleteTopic_t **del_topics,
  * @brief Delete topics from cluster as specified by the \p topics
  *        array of size \p topic_cnt elements.
  *
- * @param topics Array of topics to delete.
- * @param topic_cnt Number of elements in \p topics array.
+ * @param rk Client instance.
+ * @param del_topics Array of topics to delete.
+ * @param del_topic_cnt Number of elements in \p topics array.
  * @param options Optional admin options, or NULL for defaults.
  * @param rkqu Queue to emit result on.
  *
@@ -5385,10 +5641,10 @@ rd_kafka_DeleteTopic_destroy_array (rd_kafka_DeleteTopic_t **del_topics,
  */
 RD_EXPORT
 void rd_kafka_DeleteTopics (rd_kafka_t *rk,
-                                  rd_kafka_DeleteTopic_t **del_topics,
-                                  size_t del_topic_cnt,
-                                  const rd_kafka_AdminOptions_t *options,
-                                  rd_kafka_queue_t *rkqu);
+                            rd_kafka_DeleteTopic_t **del_topics,
+                            size_t del_topic_cnt,
+                            const rd_kafka_AdminOptions_t *options,
+                            rd_kafka_queue_t *rkqu);
 
 
 
@@ -5400,6 +5656,8 @@ void rd_kafka_DeleteTopics (rd_kafka_t *rk,
  * @brief Get an array of topic results from a DeleteTopics result.
  *
  * The returned \p topics life-time is the same as the \p result object.
+ *
+ * @param result Result to get topic results from.
  * @param cntp is updated to the number of elements in the array.
  */
 RD_EXPORT const rd_kafka_topic_result_t **
@@ -5418,6 +5676,7 @@ rd_kafka_DeleteTopics_result_topics (
  *
  */
 
+/*! NewPartitions */
 typedef struct rd_kafka_NewPartitions_s rd_kafka_NewPartitions_t;
 
 /**
@@ -5427,6 +5686,10 @@ typedef struct rd_kafka_NewPartitions_s rd_kafka_NewPartitions_t;
  *
  * @param topic Topic name to create more partitions for.
  * @param new_total_cnt Increase the topic's partition count to this value.
+ * @param errstr A human readable error string (nul-terminated) is written to
+ *               this location that must be of at least \p errstr_size bytes.
+ *               The \p errstr is only written in case of error.
+ * @param errstr_size Writable size in \p errstr.
  *
  * @returns a new allocated NewPartitions object, or NULL if the
  *          input parameters are invalid.
@@ -5487,6 +5750,7 @@ rd_kafka_NewPartitions_set_replica_assignment (rd_kafka_NewPartitions_t *new_par
  * @brief Create additional partitions for the given topics, as specified
  *        by the \p new_parts array of size \p new_parts_cnt elements.
  *
+ * @param rk Client instance.
  * @param new_parts Array of topics for which new partitions are to be created.
  * @param new_parts_cnt Number of elements in \p new_parts array.
  * @param options Optional admin options, or NULL for defaults.
@@ -5517,6 +5781,8 @@ rd_kafka_CreatePartitions (rd_kafka_t *rk,
  * @brief Get an array of topic results from a CreatePartitions result.
  *
  * The returned \p topics life-time is the same as the \p result object.
+ *
+ * @param result Result o get topic results from.
  * @param cntp is updated to the number of elements in the array.
  */
 RD_EXPORT const rd_kafka_topic_result_t **
@@ -5537,8 +5803,8 @@ rd_kafka_CreatePartitions_result_topics (
  *
  */
 
-/**
- * @enum Apache Kafka config sources
+/*!
+ * Apache Kafka config sources
  */
 typedef enum rd_kafka_ConfigSource_t {
         /**< Source unknown, e.g., in the ConfigEntry used for alter requests
@@ -5570,6 +5836,7 @@ RD_EXPORT const char *
 rd_kafka_ConfigSource_name (rd_kafka_ConfigSource_t confsource);
 
 
+/*! ConfigEntry */
 typedef struct rd_kafka_ConfigEntry_s rd_kafka_ConfigEntry_t;
 
 /**
@@ -5626,6 +5893,7 @@ rd_kafka_ConfigEntry_is_synonym (const rd_kafka_ConfigEntry_t *entry);
 /**
  * @returns the synonym config entry array.
  *
+ * @param entry Entry to get synonyms for.
  * @param cntp is updated to the number of elements in the array.
  *
  * @remark The lifetime of the returned entry is the same as \p conf .
@@ -5639,9 +5907,7 @@ rd_kafka_ConfigEntry_synonyms (const rd_kafka_ConfigEntry_t *entry,
 
 
 
-/**
- * @enum Apache Kafka resource types
- */
+/*! Apache Kafka resource types */
 typedef enum rd_kafka_ResourceType_t {
         RD_KAFKA_RESOURCE_UNKNOWN = 0, /**< Unknown */
         RD_KAFKA_RESOURCE_ANY = 1,     /**< Any (used for lookups) */
@@ -5657,9 +5923,18 @@ typedef enum rd_kafka_ResourceType_t {
 RD_EXPORT const char *
 rd_kafka_ResourceType_name (rd_kafka_ResourceType_t restype);
 
+/*! ConfigResource */
 typedef struct rd_kafka_ConfigResource_s rd_kafka_ConfigResource_t;
 
 
+/**
+ * @brief Create new ConfigResource object.
+ *
+ * @param restype The resource type (e.g., RD_KAFKA_RESOURCE_TOPIC)
+ * @param resname The resource name (e.g., the topic name)
+ *
+ * @returns a newly allocated object
+ */
 RD_EXPORT rd_kafka_ConfigResource_t *
 rd_kafka_ConfigResource_new (rd_kafka_ResourceType_t restype,
                              const char *resname);
@@ -5685,6 +5960,7 @@ rd_kafka_ConfigResource_destroy_array (rd_kafka_ConfigResource_t **config,
 /**
  * @brief Set configuration name value pair.
  *
+ * @param config ConfigResource to set config property on.
  * @param name Configuration name, depends on resource type.
  * @param value Configuration value, depends on resource type and \p name.
  *              Set to \c NULL to revert configuration value to default.
@@ -5704,6 +5980,7 @@ rd_kafka_ConfigResource_set_config (rd_kafka_ConfigResource_t *config,
  *
  * The returned object life-times are the same as the \p config object.
  *
+ * @param config ConfigResource to get configs from.
  * @param cntp is updated to the number of elements in the array.
  */
 RD_EXPORT const rd_kafka_ConfigEntry_t **
@@ -5786,6 +6063,7 @@ void rd_kafka_AlterConfigs (rd_kafka_t *rk,
  *
  * The returned object life-times are the same as the \p result object.
  *
+ * @param result Result object to get resource results from.
  * @param cntp is updated to the number of elements in the array.
  *
  * @returns an array of ConfigResource elements, or NULL if not available.
@@ -5810,19 +6088,19 @@ rd_kafka_AlterConfigs_result_resources (
 /**
  * @brief Get configuration for the specified resources in \p configs.
  *
- *        The returned configuration includes default values and the
- *        rd_kafka_ConfigEntry_is_default() or rd_kafka_ConfigEntry_source()
- *        methods may be used to distinguish them from user supplied values.
- *
- *        The value of config entries where rd_kafka_ConfigEntry_is_sensitive()
- *        is true will always be NULL to avoid disclosing sensitive
- *        information, such as security settings.
- *
- *        Configuration entries where rd_kafka_ConfigEntry_is_read_only()
- *        is true can't be updated (with rd_kafka_AlterConfigs()).
- *
- *        Synonym configuration entries are returned if the broker supports
- *        it (broker version >= 1.1.0). See rd_kafka_ConfigEntry_synonyms().
+ * The returned configuration includes default values and the
+ * rd_kafka_ConfigEntry_is_default() or rd_kafka_ConfigEntry_source()
+ * methods may be used to distinguish them from user supplied values.
+ * 
+ * The value of config entries where rd_kafka_ConfigEntry_is_sensitive()
+ * is true will always be NULL to avoid disclosing sensitive
+ * information, such as security settings.
+ * 
+ * Configuration entries where rd_kafka_ConfigEntry_is_read_only()
+ * is true can't be updated (with rd_kafka_AlterConfigs()).
+ * 
+ * Synonym configuration entries are returned if the broker supports
+ * it (broker version >= 1.1.0). See rd_kafka_ConfigEntry_synonyms().
  *
  * @remark Requires broker version >=0.11.0.0
  *
@@ -5839,6 +6117,8 @@ void rd_kafka_DescribeConfigs (rd_kafka_t *rk,
                                rd_kafka_queue_t *rkqu);
 
 
+
+
 /**
  * @brief DescribeConfigs result type and methods
  */
@@ -5847,6 +6127,8 @@ void rd_kafka_DescribeConfigs (rd_kafka_t *rk,
  * @brief Get an array of resource results from a DescribeConfigs result.
  *
  * The returned \p resources life-time is the same as the \p result object.
+ *
+ * @param result Result object to get resource results from.
  * @param cntp is updated to the number of elements in the array.
  */
 RD_EXPORT const rd_kafka_ConfigResource_t **
@@ -5885,7 +6167,8 @@ rd_kafka_DescribeConfigs_result_resources (
  *  which must be a non-negative multiple of 2.
  * @param errstr A human readable error string (nul-terminated) is written to
  *               this location that must be of at least \p errstr_size bytes.
- *               The \p errstr is only written to if there is an error.
+ *               The \p errstr is only written in case of error.
+ * @param errstr_size Writable size in \p errstr.
  *
  * The SASL/OAUTHBEARER token refresh callback or event handler should invoke
  * this method upon success. The extension keys must not include the reserved
@@ -5942,8 +6225,9 @@ rd_kafka_oauthbearer_set_token_failure (rd_kafka_t *rk, const char *errstr);
 
 /**@}*/
 
-
+/* @cond NO_DOC */
 #ifdef __cplusplus
 }
 #endif
 #endif /* _RDKAFKA_H_ */
+/* @endcond NO_DOC */
